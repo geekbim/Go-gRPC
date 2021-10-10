@@ -1,0 +1,1 @@
+protoc --go_out=_generated --go_opt=paths=source_relative --go-grpc_out=_generated --go-grpc_opt=paths=source_relative user_management/user_management.proto
