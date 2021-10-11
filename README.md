@@ -5,11 +5,11 @@
    git clone https://github.com/geekbim/Go-gRPC.git
    ```
 2. Generate Protobuf
-   ```sh
+   ```bash
    sh run-proto.sh
    ```
 3. Running PostgreSQL Container
-   ```sh
+   ```bash
    sh postgre.sh
    ```
 4. Running gRPC Server
