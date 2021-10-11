@@ -2,15 +2,15 @@ package main
 
 import (
 	"context"
-	"io/ioutil"
+	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"os"
 
 	pb "example.com/go-grpc-user-management/_generated/user-management"
+	"github.com/jackc/pgx/v4"
+	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
@@ -22,6 +22,7 @@ func NewUserManagementServer() *UserManagementServer {
 }
 
 type UserManagementServer struct {
+	conn *pgx.Conn
 	pb.UnimplementedUserManagementServer
 }
 
@@ -40,65 +41,83 @@ func (server *UserManagementServer) Run() error {
 
 func (s *UserManagementServer) CreateNewUser(ctx context.Context, in *pb.NewUser) (*pb.User, error) {
 	log.Printf("Received: %v", in.GetName())
-	readBytes, err := ioutil.ReadFile("users.json")
-	var userList *pb.UserList = &pb.UserList{}
-	userId := uint32(rand.Intn(1000))
+
+	createSql := `
+		create table if not exists users(
+			id		SERIAL 		PRIMARY KEY,
+			name	TEXT,
+			age		INT
+		);
+	`
+
+	_, err := s.conn.Exec(context.Background(), createSql)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "table creation failed %v\n", err)
+		os.Exit(1)
+	}
+
 	createdUser := &pb.User{
-		Id:   userId,
 		Name: in.GetName(),
 		Age:  in.GetAge(),
 	}
-
+	tx, err := s.conn.Begin(context.Background())
 	if err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("file not found, creating new file")
-			userList.Users = append(userList.Users, createdUser)
-			jsonBytes, err := protojson.Marshal(userList)
-			if err != nil {
-				log.Fatalf("json marshaling failed : %v", err)
-			}
-			if err := ioutil.WriteFile("users.json", jsonBytes, 0664); err != nil {
-				log.Fatalf("failed write to file : %v", err)
-			}
-
-			return createdUser, nil
-		} else {
-			log.Fatalf("error reading file : %v", err)
-		}
+		log.Fatalf("conn begin failed : %v", err)
 	}
 
-	if err := protojson.Unmarshal(readBytes, userList); err != nil {
-		log.Fatalf("failed to parse user list : %v", err)
-	}
-
-	userList.Users = append(userList.Users, createdUser)
-	jsonBytes, err := protojson.Marshal(userList)
+	_, err = tx.Exec(context.Background(), "insert into users(name, age) values ($1, $2)",
+		createdUser.Name,
+		createdUser.Age,
+	)
 	if err != nil {
-		log.Fatalf("json marshaling failed : %v", err)
+		log.Fatalf("tx.Exec failed :%v", err)
 	}
-	if err := ioutil.WriteFile("users.json", jsonBytes, 0664); err != nil {
-		log.Fatalf("failed write to file : %v", err)
-	}
+
+	tx.Commit(context.Background())
 
 	return createdUser, nil
 }
 
 func (s *UserManagementServer) GetUsers(ctx context.Context, in *pb.GetUsersParams) (*pb.UserList, error) {
-	jsonBytes, err := ioutil.ReadFile("users.json")
-	if err != nil {
-		log.Fatalf("failed read from file : %v", err)
-	}
-
 	var userList *pb.UserList = &pb.UserList{}
-	if err := protojson.Unmarshal(jsonBytes, userList); err != nil {
-		log.Fatalf("unmarshaling failed : %v", err)
+	rows, err := s.conn.Query(context.Background(), "select * from users")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		user := pb.User{}
+		err = rows.Scan(&user.Id, &user.Name, &user.Age)
+		if err != nil {
+			return nil, err
+		}
+		userList.Users = append(userList.Users, &user)
 	}
 
 	return userList, nil
 }
 
 func main() {
+	err := godotenv.Load(".env")
+
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	databaseUrl := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
+		os.Getenv("DB_USER"),
+		os.Getenv("DB_PASS"),
+		os.Getenv("DB_HOST"),
+		os.Getenv("DB_NAME"),
+	)
+	conn, err := pgx.Connect(context.Background(), databaseUrl)
+	if err != nil {
+		log.Fatalf("unable to establish connection : %v", err)
+	}
+	defer conn.Close(context.Background())
+
 	var userManagementServer *UserManagementServer = NewUserManagementServer()
+	userManagementServer.conn = conn
 	if err := userManagementServer.Run(); err != nil {
 		log.Fatalf("failed to serve : %v", err)
 	}

@@ -8,11 +8,15 @@
    ```sh
    sh run-proto.sh
    ```
-3. Running gRPC Server
+3. Running PostgreSQL Container
+   ```sh
+   sh postgre.sh
+   ```
+4. Running gRPC Server
    ```go
    go run user-management-server/user_management_server.go
    ```
-4. Running gRPC Client
+5. Running gRPC Client
    ```go
    go run user-management-client/user_management_client.go
    ```
